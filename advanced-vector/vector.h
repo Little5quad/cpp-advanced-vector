@@ -124,13 +124,12 @@ public:
                 return *this;
             }
 
+            std::copy(rhs.data_.GetAddress(), rhs.data_.GetAddress() + std::min(rhs.Size(), Size()), data_.GetAddress());
+            
             if (rhs.Size() < Size()) {
-                std::copy(rhs.data_.GetAddress(), rhs.data_.GetAddress() + rhs.Size(), data_.GetAddress());
                 std::destroy_n(data_.GetAddress() + rhs.Size(), size_ - rhs.size_);
             }
             else {
-                std::copy(rhs.data_.GetAddress(), rhs.data_.GetAddress() + size_, data_.GetAddress());
-
                 std::uninitialized_copy_n(rhs.data_.GetAddress() + size_, rhs.size_ - size_, data_.GetAddress() + size_);
             }
             size_ = rhs.size_;
@@ -174,47 +173,16 @@ public:
         int offset = pos - begin();
 
         if (size_ < data_.Capacity()) {
-            try {
-                if (pos != end()) {
-                    T tmp_obj(std::forward<Args>(args)...);
-                    new (end()) T(std::forward<T>(data_[size_ - 1]));
-                    std::move_backward(begin() + offset, end() - 1, end());
-                    *(begin() + offset) = std::forward<T>(tmp_obj);
-                }
-                else {
-                    new (end()) T(std::forward<Args>(args)...);
-                }
-            }
-            catch (...) {
-                operator delete (end());
-                throw;
-            }
+            InsertWithRelocation(pos, std::forward<Args>(args)...);
         }
         else {
-            RawMemory<T> new_data(size_ == 0 ? 1 : size_ * 2);
-            new (new_data.GetAddress() + offset) T(std::forward<Args>(args)...);
-
-            if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-                std::uninitialized_move_n(data_.GetAddress(), offset, new_data.GetAddress());
-            }
-            else {
-                std::uninitialized_copy_n(data_.GetAddress(), offset, new_data.GetAddress());
-            }
-
-            if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-                std::uninitialized_move_n(data_.GetAddress() + offset, Size() - offset, new_data.GetAddress() + offset + 1);
-            }
-            else {
-                std::uninitialized_copy_n(data_.GetAddress() + offset, Size() - offset, new_data.GetAddress() + offset + 1);
-            }
-
-            std::destroy_n(data_.GetAddress(), Size());
-            data_.Swap(new_data);
+            InsertWithoutRelocation(pos, std::forward<Args>(args)...);
         }
 
         ++size_;
         return begin() + offset;
     }
+    
     iterator Erase(const_iterator pos) /*noexcept(std::is_nothrow_move_assignable_v<T>)*/ {
         int offset = pos - begin();
         std::move(begin() + offset + 1, end(), begin() + offset);
@@ -244,7 +212,7 @@ public:
 
         RawMemory<T> new_data(new_capacity);
 
-        FillNewData(new_data);
+        FillNewData(new_data, size_);
 
         std::destroy_n(data_.GetAddress(), size_);
         data_.Swap(new_data);
@@ -286,7 +254,7 @@ public:
             RawMemory<T> new_data(size_ == 0 ? 1 : size_ * 2);
             new (new_data.GetAddress() + size_) T(std::forward<Args>(args)...);
             
-            FillNewData(new_data);
+            FillNewData(new_data, size_);
             
             std::destroy_n(data_.GetAddress(), size_);
             data_.Swap(new_data);
@@ -315,16 +283,58 @@ private:
     RawMemory<T> data_;
     size_t size_ = 0;
 
-    void FillNewData(RawMemory<T>& new_data) {
+    void FillNewData(RawMemory<T>& new_data, int offset) {
         //Выполняется на этапе компиляции 
         if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
-            std::uninitialized_move_n(data_.GetAddress(), size_, new_data.GetAddress());
+            std::uninitialized_move_n(data_.GetAddress(), offset, new_data.GetAddress());
         }
         else {
-            std::uninitialized_copy_n(data_.GetAddress(), size_, new_data.GetAddress());
+            std::uninitialized_copy_n(data_.GetAddress(), offset, new_data.GetAddress());
         }
     }
 
+    //Вставка с релокацией 
+    template<typename... Args>
+    void InsertWithRelocation(const_iterator pos, Args&&... args) {
+        try {
+            int offset = pos - begin();
+            if (pos != end()) {
+                T tmp_obj(std::forward<Args>(args)...);
+                new (end()) T(std::forward<T>(data_[size_ - 1]));
+                std::move_backward(begin() + offset, end() - 1, end());
+                *(begin() + offset) = std::forward<T>(tmp_obj);
+            }
+             else {
+                new (end()) T(std::forward<Args>(args)...);
+            }
+         }
+         catch (...) {
+            operator delete (end());
+            throw;
+         }
+    }
+    
+    
+    //Вставка без релокацией 
+    template<typename... Args>
+    void InsertWithoutRelocation(const_iterator pos, Args&&... args) {
+        int offset = pos - begin();
+        RawMemory<T> new_data(size_ == 0 ? 1 : size_ * 2);
+        new (new_data.GetAddress() + offset) T(std::forward<Args>(args)...);
+
+        FillNewData(new_data, offset);
+
+        if constexpr (std::is_nothrow_move_constructible_v<T> || !std::is_copy_constructible_v<T>) {
+            std::uninitialized_move_n(data_.GetAddress() + offset, Size() - offset, new_data.GetAddress() + offset + 1);
+        }
+        else {
+            std::uninitialized_copy_n(data_.GetAddress() + offset, Size() - offset, new_data.GetAddress() + offset + 1);
+        }
+
+        std::destroy_n(data_.GetAddress(), Size());
+        data_.Swap(new_data);
+    }
+    
     // Вызывает деструкторы n объектов массива по адресу buf
     static void DestroyN(T* buf, size_t n) noexcept {
         for (size_t i = 0; i != n; ++i) {
@@ -343,5 +353,3 @@ private:
     }
 
 };
-
-//позже реализую "можно лучше" сейчас мало совободного времени 
