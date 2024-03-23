@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <string_view>
+#include <algorithm>
 
 namespace {
 
@@ -601,6 +603,7 @@ struct C {
 
 void Dump() {
     using namespace std;
+    using namespace std::literals;
     cerr << "Def ctors: "sv << C::def_ctor              //
          << ", Copy ctors: "sv << C::copy_ctor          //
          << ", Move ctors: "sv << C::move_ctor          //
@@ -611,6 +614,7 @@ void Dump() {
 
 void Benchmark() {
     using namespace std;
+    using namespace std::literals;
     try {
         const size_t NUM = 10;
         C c;
